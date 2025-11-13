@@ -6,17 +6,20 @@ Doni — Telegram Bot
 Бесплатная версия для деплоя на Render (Web Service plan).
 Использует long polling + встроенный веб-сервер, чтобы Render не «усыплял» процесс.
 """
-
 import os
 import asyncio
 from aiohttp import web
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher
+from aiogram.types import Message
+from aiogram.filters import Command
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
 import aiohttp
 import sqlite3
 from datetime import datetime
 
 # ==========================
-# 🔧 Конфигурация
+# Конфигурация
 # ==========================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -24,13 +27,19 @@ GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googl
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "text-bison-001")
 
 if not TELEGRAM_TOKEN:
-    raise RuntimeError("❌ Отсутствует TELEGRAM_TOKEN. Добавь его в переменные окружения Render!")
+    raise RuntimeError("Отсутствует TELEGRAM_TOKEN. Добавь его в переменные окружения Render!")
 
-bot = Bot(token=TELEGRAM_TOKEN)
-dp = Dispatcher(bot)
+# Bot с настройками по умолчанию (HTML + защита от ссылок)
+bot = Bot(
+    token=TELEGRAM_TOKEN,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
+
+# Диспетчер — БЕЗ аргументов!
+dp = Dispatcher()
 
 # ==========================
-# 💾 Простейшая база (SQLite)
+# Простейшая база (SQLite)
 # ==========================
 DB_PATH = "doni_memory.sqlite"
 
@@ -57,7 +66,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-def save_user(user: types.User):
+def save_user(user):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT user_id FROM users WHERE user_id=?", (user.id,))
@@ -91,10 +100,10 @@ def get_last_messages(uid: int, limit: int = 5):
     return rows
 
 # ==========================
-# 🌐 Мини-вебсервер для Render
+# Мини-вебсервер для Render
 # ==========================
 async def handle(request):
-    return web.Response(text="Doni is alive 🤑")
+    return web.Response(text="Doni is alive")
 
 async def start_web_server():
     app = web.Application()
@@ -104,47 +113,48 @@ async def start_web_server():
     port = int(os.getenv("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"🌍 Мини-сервер запущен на порту {port}")
+    print(f"Мини-сервер запущен на порту {port}")
 
 # ==========================
-# 🤖 Gemini API
+# Gemini API
 # ==========================
 async def call_gemini(prompt: str) -> str:
     if not GEMINI_API_KEY:
-        return "⚠️ Ошибка: не найден GEMINI_API_KEY."
+        return "Ошибка: не найден GEMINI_API_KEY."
     url = f"{GEMINI_BASE_URL}/v1beta2/models/{GEMINI_MODEL}:generateText?key={GEMINI_API_KEY}"
     payload = {"prompt": {"text": prompt}, "maxOutputTokens": 400}
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, timeout=60) as resp:
                 data = await resp.json()
-                return data.get("candidates", [{}])[0].get("output", "⚠️ Ошибка ответа Gemini")
+                return data.get("candidates", [{}])[0].get("output", "Ошибка ответа Gemini")
     except Exception as e:
-        return f"⚠️ Ошибка Gemini API: {e}"
+        return f"Ошибка Gemini API: {e}"
 
 # ==========================
-# 💬 Обработчики команд
+# Обработчики команд
 # ==========================
-@dp.message_handler(commands=["start"])
-async def start_cmd(msg: types.Message):
+@dp.message(Command("start"))
+async def start_cmd(msg: Message):
     save_user(msg.from_user)
     await msg.answer(
-        "Привет, я Doni 💰 — твой дружелюбный миллионер!\n"
-        "Могу болтать, давать советы, вдохновлять и шутить 😎\n\n"
+        "Привет, я <b>Doni</b> — твой дружелюбный миллионер!\n"
+        "Могу болтать, давать советы, вдохновлять и шутить\n\n"
         "Просто напиши мне сообщение!"
     )
 
-@dp.message_handler(commands=["help"])
-async def help_cmd(msg: types.Message):
+@dp.message(Command("help"))
+async def help_cmd(msg: Message):
     await msg.answer(
+        "<b>Команды:</b>\n"
         "/start — начать\n"
         "/help — список команд\n"
         "/profile — информация о тебе\n"
-        "А просто пиши текст — я отвечу 😉"
+        "А просто пиши текст — я отвечу"
     )
 
-@dp.message_handler(commands=["profile"])
-async def profile_cmd(msg: types.Message):
+@dp.message(Command("profile"))
+async def profile_cmd(msg: Message):
     uid = msg.from_user.id
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -154,48 +164,47 @@ async def profile_cmd(msg: types.Message):
     if row:
         username, first_name, joined_at = row
         await msg.answer(
-            f"🧾 Твой профиль:\n"
+            f"<b>Твой профиль:</b>\n"
             f"Имя: {first_name or 'Без имени'}\n"
             f"Логин: @{username or '—'}\n"
-            f"Дата регистрации: {joined_at}"
+            f"Дата регистрации: {joined_at.split('T')[0]}"
         )
     else:
         await msg.answer("Ты ещё не зарегистрирован. Напиши /start.")
 
 # ==========================
-# 💬 Основной чат
+# Основной чат
 # ==========================
-@dp.message_handler()
-async def chat_handler(msg: types.Message):
+@dp.message()
+async def chat_handler(msg: Message):
     user = msg.from_user
     save_user(user)
     user_text = msg.text.strip()
     save_message(user.id, "user", user_text)
-
     history = get_last_messages(user.id)
     hist_text = "\n".join(
         [("Пользователь: " if r == "user" else "Doni: ") + t for r, t in history]
     )
-
     prompt = (
         f"Ты — Doni, дружелюбный миллионер с чувством юмора и знаниями в крипте, банкинге и инвестициях.\n"
         f"Отвечай легко, уверенно, иногда с шутками.\n"
         f"История диалога:\n{hist_text}\n\n"
         f"Пользователь: {user_text}\nDoni:"
     )
-
     reply = await call_gemini(prompt)
     save_message(user.id, "assistant", reply)
     await msg.answer(reply)
 
 # ==========================
-# 🚀 Главная точка входа
+# Главная точка входа
 # ==========================
 async def main():
-    print("🚀 Doni Bot запущен")
+    print("Doni Bot запущен")
     init_db()
-    asyncio.create_task(start_web_server())  # поддерживает Render
-    await dp.start_polling()
+    # Запускаем веб-сервер в фоне
+    asyncio.create_task(start_web_server())
+    # Запускаем polling с передачей bot
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
