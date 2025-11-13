@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Doni — Telegram Bot
--------------------
-Актуальная версия (2025)
-Работает с Gemini 1.5 Flash API через Google Generative Language API.
-Подходит для деплоя на Render (Web Service plan).
+Doni — Telegram Bot (упрощённая версия)
+---------------------------------------
+Работает с Gemini 1.5 Flash API без необходимости указывать BASE_URL и MODEL в .env
+Идеально подходит для деплоя на Render (Web Service plan)
 """
 
 import os
@@ -25,11 +24,11 @@ from datetime import datetime
 # ==========================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash-latest")
 
 if not TELEGRAM_TOKEN:
-    raise RuntimeError("Отсутствует TELEGRAM_TOKEN. Добавь его в переменные окружения Render!")
+    raise RuntimeError("❌ TELEGRAM_TOKEN отсутствует в переменных окружения Render.")
+if not GEMINI_API_KEY:
+    raise RuntimeError("❌ GEMINI_API_KEY отсутствует в переменных окружения Render.")
 
 # Инициализация бота
 bot = Bot(
@@ -39,7 +38,7 @@ bot = Bot(
 dp = Dispatcher()
 
 # ==========================
-# Простейшая база (SQLite)
+# Простая база (SQLite)
 # ==========================
 DB_PATH = "doni_memory.sqlite"
 
@@ -103,7 +102,7 @@ def get_last_messages(uid: int, limit: int = 5):
 # Мини-вебсервер для Render
 # ==========================
 async def handle(request):
-    return web.Response(text="Doni is alive")
+    return web.Response(text="Doni is alive 🚀")
 
 async def start_web_server():
     app = web.Application()
@@ -113,16 +112,16 @@ async def start_web_server():
     port = int(os.getenv("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"Мини-сервер запущен на порту {port}")
+    print(f"🌐 Мини-сервер запущен на порту {port}")
 
 # ==========================
-# Gemini API (новая версия)
+# Gemini API (без URL и модели)
 # ==========================
 async def call_gemini(prompt: str) -> str:
-    if not GEMINI_API_KEY:
-        return "Ошибка: не найден GEMINI_API_KEY."
-
-    url = f"{GEMINI_BASE_URL}/v1/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    """
+    Отправляет запрос в Google Gemini API (v1) без указания BASE_URL и MODEL в .env
+    """
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_API_KEY}"
     payload = {
         "contents": [
             {"parts": [{"text": prompt}]}
@@ -134,21 +133,21 @@ async def call_gemini(prompt: str) -> str:
             async with session.post(url, json=payload, timeout=60) as resp:
                 data = await resp.json()
                 if "error" in data:
-                    return f"Ошибка Gemini API: {data['error'].get('message', 'Неизвестная ошибка')}"
+                    return f"⚠️ Ошибка Gemini API: {data['error'].get('message', 'Неизвестная ошибка')}"
                 return data["candidates"][0]["content"]["parts"][0]["text"]
     except Exception as e:
-        return f"Ошибка соединения с Gemini: {e}"
+        return f"⚠️ Ошибка соединения с Gemini: {e}"
 
 # ==========================
-# Обработчики команд
+# Команды
 # ==========================
 @dp.message(Command("start"))
 async def start_cmd(msg: Message):
     save_user(msg.from_user)
     await msg.answer(
-        "Привет, я <b>Doni</b> — твой дружелюбный миллионер 💸\n"
-        "Могу болтать, давать советы, вдохновлять и шутить 😎\n\n"
-        "Просто напиши мне сообщение!"
+        "Привет, я <b>Doni</b> 💰 — твой дружелюбный миллионер!\n"
+        "Готов говорить обо всём: деньги, успех, крипта и жизнь 😎\n\n"
+        "Просто напиши сообщение 👇"
     )
 
 @dp.message(Command("help"))
@@ -156,9 +155,9 @@ async def help_cmd(msg: Message):
     await msg.answer(
         "<b>Команды:</b>\n"
         "/start — начать\n"
-        "/help — список команд\n"
+        "/help — помощь\n"
         "/profile — твой профиль\n\n"
-        "А просто пиши текст — я отвечу 😉"
+        "А просто пиши — я отвечу 😉"
     )
 
 @dp.message(Command("profile"))
@@ -196,8 +195,8 @@ async def chat_handler(msg: Message):
     )
 
     prompt = (
-        f"Ты — Doni, дружелюбный миллионер с чувством юмора, разбираешься в крипте, банкинге и инвестициях.\n"
-        f"Отвечай уверенно, с лёгкими шутками.\n"
+        f"Ты — Doni, уверенный миллионер с чувством юмора, знаток инвестиций, крипты и финансов.\n"
+        f"Отвечай дружелюбно, с лёгкой харизмой.\n\n"
         f"История диалога:\n{hist_text}\n\n"
         f"Пользователь: {user_text}\nDoni:"
     )
@@ -210,7 +209,7 @@ async def chat_handler(msg: Message):
 # Главная точка входа
 # ==========================
 async def main():
-    print("🚀 Doni Bot запущен!")
+    print("🚀 Doni Bot запущен и готов к работе!")
     init_db()
     asyncio.create_task(start_web_server())
     await dp.start_polling(bot)
