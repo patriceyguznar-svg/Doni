@@ -4,7 +4,7 @@
 Doni — Telegram Bot
 -------------------
 Полностью готовый код для Render (Web Service).
-Работает с gemini-2.0-flash + реальным ключом.
+Исправлено под gemini-2.5-flash (ноябрь 2025).
 """
 import os
 import asyncio
@@ -24,7 +24,7 @@ from datetime import datetime
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")  # Твоя модель
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")  # Актуальная модель (2025)
 
 if not TELEGRAM_TOKEN:
     raise RuntimeError("Отсутствует TELEGRAM_TOKEN!")
@@ -93,17 +93,22 @@ async def start_web_server():
     print(f"Веб-сервер запущен на порту {port}")
 
 # ==========================
-# Gemini API — РАБОЧАЯ ВЕРСИЯ
+# Gemini API — ИСПРАВЛЕНО ПОД 2.5 FLASH
 # ==========================
 async def call_gemini(prompt: str) -> str:
     url = f"{GEMINI_BASE_URL}/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
     
     payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": prompt}]
+            }
+        ],
         "generationConfig": {
-            "maxOutputTokens": 1000,
-            "temperature": 0.8,
-            "topP": 0.95
+            "maxOutputTokens": 8192,  # Максимум для 2.5 Flash
+            "temperature": 0.8,       # Юмор Doni
+            "topP": 0.95              # Разнообразие
         }
     }
 
@@ -113,7 +118,7 @@ async def call_gemini(prompt: str) -> str:
                 if resp.status != 200:
                     error = await resp.text()
                     print(f"Gemini ошибка {resp.status}: {error}")
-                    return f"Ошибка: {resp.status}"
+                    return f"Ошибка: {resp.status} ({error[:100]}...)"
                 
                 data = await resp.json()
                 candidates = data.get("candidates", [])
