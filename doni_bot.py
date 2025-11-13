@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Doni — Telegram Bot (упрощённая версия)
----------------------------------------
-Работает с Gemini 1.5 Flash API без необходимости указывать BASE_URL и MODEL в .env
-Идеально подходит для деплоя на Render (Web Service plan)
+Doni — Telegram Bot
+-------------------
+Полностью готовый код для Render (Web Service).
+Работает с gemini-2.0-flash + реальным ключом.
 """
-
 import os
 import asyncio
 from aiohttp import web
@@ -24,68 +23,48 @@ from datetime import datetime
 # ==========================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")  # Твоя модель
 
 if not TELEGRAM_TOKEN:
-    raise RuntimeError("❌ TELEGRAM_TOKEN отсутствует в переменных окружения Render.")
+    raise RuntimeError("Отсутствует TELEGRAM_TOKEN!")
 if not GEMINI_API_KEY:
-    raise RuntimeError("❌ GEMINI_API_KEY отсутствует в переменных окружения Render.")
+    raise RuntimeError("Отсутствует GEMINI_API_KEY!")
 
-# Инициализация бота
-bot = Bot(
-    token=TELEGRAM_TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
-)
+# Bot
+bot = Bot(token=TELEGRAM_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
 # ==========================
-# Простая база (SQLite)
+# База данных
 # ==========================
 DB_PATH = "doni_memory.sqlite"
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            username TEXT,
-            first_name TEXT,
-            joined_at TEXT
-        )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            role TEXT,
-            text TEXT,
-            created_at TEXT
-        )
-    """)
+    cur.execute("""CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, joined_at TEXT)""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, role TEXT, text TEXT, created_at TEXT)""")
     conn.commit()
     conn.close()
 
 def save_user(user):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("SELECT user_id FROM users WHERE user_id=?", (user.id,))
+    cur.execute("SELECT 1 FROM users WHERE user_id=?", (user.id,))
     if not cur.fetchone():
-        cur.execute("INSERT INTO users VALUES (?, ?, ?, ?)", (
-            user.id,
-            user.username,
-            user.first_name,
-            datetime.utcnow().isoformat()
-        ))
+        cur.execute("INSERT INTO users VALUES (?, ?, ?, ?)",
+                    (user.id, user.username, user.first_name, datetime.utcnow().isoformat()))
         conn.commit()
     conn.close()
 
 def save_message(uid: int, role: str, text: str):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO messages(user_id, role, text, created_at) VALUES (?, ?, ?, ?)",
-        (uid, role, text, datetime.utcnow().isoformat())
-    )
+    cur.execute("INSERT INTO messages(user_id, role, text, created_at) VALUES (?, ?, ?, ?)",
+                (uid, role, text, datetime.utcnow().isoformat()))
     conn.commit()
     conn.close()
 
@@ -95,14 +74,13 @@ def get_last_messages(uid: int, limit: int = 5):
     cur.execute("SELECT role, text FROM messages WHERE user_id=? ORDER BY id DESC LIMIT ?", (uid, limit))
     rows = cur.fetchall()
     conn.close()
-    rows.reverse()
-    return rows
+    return rows[::-1]  # reverse
 
 # ==========================
-# Мини-вебсервер для Render
+# Веб-сервер для Render
 # ==========================
 async def handle(request):
-    return web.Response(text="Doni is alive 🚀")
+    return web.Response(text="Doni is alive")
 
 async def start_web_server():
     app = web.Application()
@@ -112,31 +90,40 @@ async def start_web_server():
     port = int(os.getenv("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"🌐 Мини-сервер запущен на порту {port}")
+    print(f"Веб-сервер запущен на порту {port}")
 
 # ==========================
-# Gemini API (без URL и модели)
+# Gemini API — РАБОЧАЯ ВЕРСИЯ
 # ==========================
 async def call_gemini(prompt: str) -> str:
-    """
-    Отправляет запрос в Google Gemini API (v1) без указания BASE_URL и MODEL в .env
-    """
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_API_KEY}"
+    url = f"{GEMINI_BASE_URL}/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    
     payload = {
-        "contents": [
-            {"parts": [{"text": prompt}]}
-        ]
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "maxOutputTokens": 1000,
+            "temperature": 0.8,
+            "topP": 0.95
+        }
     }
 
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, timeout=60) as resp:
+                if resp.status != 200:
+                    error = await resp.text()
+                    print(f"Gemini ошибка {resp.status}: {error}")
+                    return f"Ошибка: {resp.status}"
+                
                 data = await resp.json()
-                if "error" in data:
-                    return f"⚠️ Ошибка Gemini API: {data['error'].get('message', 'Неизвестная ошибка')}"
-                return data["candidates"][0]["content"]["parts"][0]["text"]
+                candidates = data.get("candidates", [])
+                if candidates:
+                    return candidates[0]["content"]["parts"][0]["text"]
+                return "Пустой ответ от Gemini"
+                
     except Exception as e:
-        return f"⚠️ Ошибка соединения с Gemini: {e}"
+        print(f"Исключение: {e}")
+        return f"Ошибка: {str(e)[:100]}"
 
 # ==========================
 # Команды
@@ -145,9 +132,8 @@ async def call_gemini(prompt: str) -> str:
 async def start_cmd(msg: Message):
     save_user(msg.from_user)
     await msg.answer(
-        "Привет, я <b>Doni</b> 💰 — твой дружелюбный миллионер!\n"
-        "Готов говорить обо всём: деньги, успех, крипта и жизнь 😎\n\n"
-        "Просто напиши сообщение 👇"
+        "<b>Привет!</b> Я <b>Doni</b> — твой миллионер с чувством юмора!\n"
+        "Пиши что угодно — отвечу с огоньком"
     )
 
 @dp.message(Command("help"))
@@ -156,8 +142,7 @@ async def help_cmd(msg: Message):
         "<b>Команды:</b>\n"
         "/start — начать\n"
         "/help — помощь\n"
-        "/profile — твой профиль\n\n"
-        "А просто пиши — я отвечу 😉"
+        "/profile — твой профиль"
     )
 
 @dp.message(Command("profile"))
@@ -169,15 +154,15 @@ async def profile_cmd(msg: Message):
     row = cur.fetchone()
     conn.close()
     if row:
-        username, first_name, joined_at = row
+        username, name, date = row
         await msg.answer(
-            f"<b>Твой профиль:</b>\n"
-            f"Имя: {first_name or 'Без имени'}\n"
+            f"<b>Профиль:</b>\n"
+            f"Имя: {name}\n"
             f"Логин: @{username or '—'}\n"
-            f"Дата регистрации: {joined_at.split('T')[0]}"
+            f"С нами с: {date.split('T')[0]}"
         )
     else:
-        await msg.answer("Ты ещё не зарегистрирован. Напиши /start.")
+        await msg.answer("Напиши /start")
 
 # ==========================
 # Основной чат
@@ -186,19 +171,17 @@ async def profile_cmd(msg: Message):
 async def chat_handler(msg: Message):
     user = msg.from_user
     save_user(user)
-    user_text = msg.text.strip()
-    save_message(user.id, "user", user_text)
+    text = msg.text.strip()
+    save_message(user.id, "user", text)
 
     history = get_last_messages(user.id)
-    hist_text = "\n".join(
-        [("Пользователь: " if r == "user" else "Doni: ") + t for r, t in history]
-    )
+    hist = "\n".join([f"{'Ты' if r == 'user' else 'Doni'}: {t}" for r, t in history])
 
     prompt = (
-        f"Ты — Doni, уверенный миллионер с чувством юмора, знаток инвестиций, крипты и финансов.\n"
-        f"Отвечай дружелюбно, с лёгкой харизмой.\n\n"
-        f"История диалога:\n{hist_text}\n\n"
-        f"Пользователь: {user_text}\nDoni:"
+        f"Ты — Doni, миллионер с юмором, эксперт по крипте и инвестициям.\n"
+        f"Отвечай легко, уверенно, с шутками.\n"
+        f"История:\n{hist}\n\n"
+        f"Пользователь: {text}\nDoni:"
     )
 
     reply = await call_gemini(prompt)
@@ -206,10 +189,10 @@ async def chat_handler(msg: Message):
     await msg.answer(reply)
 
 # ==========================
-# Главная точка входа
+# Запуск
 # ==========================
 async def main():
-    print("🚀 Doni Bot запущен и готов к работе!")
+    print("Doni Bot запущен")
     init_db()
     asyncio.create_task(start_web_server())
     await dp.start_polling(bot)
