@@ -17,32 +17,26 @@ from aiogram.enums import ParseMode
 import aiohttp
 import sqlite3
 from datetime import datetime
-
 # ==========================
 # Конфигурация
 # ==========================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "text-bison-001")
-
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")  # Актуальная модель (2025)
 if not TELEGRAM_TOKEN:
     raise RuntimeError("Отсутствует TELEGRAM_TOKEN. Добавь его в переменные окружения Render!")
-
 # Bot с настройками по умолчанию (HTML + защита от ссылок)
 bot = Bot(
     token=TELEGRAM_TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
-
 # Диспетчер — БЕЗ аргументов!
 dp = Dispatcher()
-
 # ==========================
 # Простейшая база (SQLite)
 # ==========================
 DB_PATH = "doni_memory.sqlite"
-
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -65,7 +59,6 @@ def init_db():
     """)
     conn.commit()
     conn.close()
-
 def save_user(user):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -79,7 +72,6 @@ def save_user(user):
         ))
         conn.commit()
     conn.close()
-
 def save_message(uid: int, role: str, text: str):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -89,7 +81,6 @@ def save_message(uid: int, role: str, text: str):
     )
     conn.commit()
     conn.close()
-
 def get_last_messages(uid: int, limit: int = 5):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -98,13 +89,11 @@ def get_last_messages(uid: int, limit: int = 5):
     conn.close()
     rows.reverse()
     return rows
-
 # ==========================
 # Мини-вебсервер для Render
 # ==========================
 async def handle(request):
     return web.Response(text="Doni is alive")
-
 async def start_web_server():
     app = web.Application()
     app.router.add_get("/", handle)
@@ -114,23 +103,46 @@ async def start_web_server():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
     print(f"Мини-сервер запущен на порту {port}")
-
 # ==========================
-# Gemini API
+# Gemini API — АКТУАЛЬНАЯ ВЕРСИЯ (2025)
 # ==========================
 async def call_gemini(prompt: str) -> str:
     if not GEMINI_API_KEY:
         return "Ошибка: не найден GEMINI_API_KEY."
-    url = f"{GEMINI_BASE_URL}/v1beta2/models/{GEMINI_MODEL}:generateText?key={GEMINI_API_KEY}"
-    payload = {"prompt": {"text": prompt}, "maxOutputTokens": 400}
+    
+    # Актуальный эндпоинт: v1beta + generateContent (подтверждено документацией)
+    url = f"{GEMINI_BASE_URL}/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    
+    # Актуальный payload для generateContent
+    payload = {
+        "contents": [
+            {
+                "parts": [{"text": prompt}]
+            }
+        ],
+        "generationConfig": {
+            "maxOutputTokens": 500,
+            "temperature": 0.8  # Для юмора и креативности Doni
+        }
+    }
+    
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, timeout=60) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    print(f"Gemini ошибка {resp.status}: {error_text}")  # Лог для Render
+                    return f"Ошибка Gemini: {resp.status} ({error_text[:100]}...)"
+                
                 data = await resp.json()
-                return data.get("candidates", [{}])[0].get("output", "Ошибка ответа Gemini")
+                if "candidates" in data and data["candidates"]:
+                    return data["candidates"][0]["content"]["parts"][0]["text"]
+                else:
+                    return "Gemini вернул пустой ответ 😅"
+                    
     except Exception as e:
-        return f"Ошибка Gemini API: {e}"
-
+        print(f"Gemini исключение: {e}")  # Лог для Render
+        return f"Ошибка подключения: {str(e)[:100]}"
 # ==========================
 # Обработчики команд
 # ==========================
@@ -142,7 +154,6 @@ async def start_cmd(msg: Message):
         "Могу болтать, давать советы, вдохновлять и шутить\n\n"
         "Просто напиши мне сообщение!"
     )
-
 @dp.message(Command("help"))
 async def help_cmd(msg: Message):
     await msg.answer(
@@ -152,7 +163,6 @@ async def help_cmd(msg: Message):
         "/profile — информация о тебе\n"
         "А просто пиши текст — я отвечу"
     )
-
 @dp.message(Command("profile"))
 async def profile_cmd(msg: Message):
     uid = msg.from_user.id
@@ -171,7 +181,6 @@ async def profile_cmd(msg: Message):
         )
     else:
         await msg.answer("Ты ещё не зарегистрирован. Напиши /start.")
-
 # ==========================
 # Основной чат
 # ==========================
@@ -194,7 +203,6 @@ async def chat_handler(msg: Message):
     reply = await call_gemini(prompt)
     save_message(user.id, "assistant", reply)
     await msg.answer(reply)
-
 # ==========================
 # Главная точка входа
 # ==========================
@@ -205,6 +213,5 @@ async def main():
     asyncio.create_task(start_web_server())
     # Запускаем polling с передачей bot
     await dp.start_polling(bot)
-
 if __name__ == "__main__":
     asyncio.run(main())
