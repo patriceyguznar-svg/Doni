@@ -1,0 +1,20 @@
+name: Keep Render Alive — Auto Deploy Every 10 Min
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'  # Каждые 10 минут
+  workflow_dispatch:        # Ручной запуск
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Make empty commit
+        run: |
+          git config --global user.name "Render Keep-Alive"
+          git config --global user.email "bot@render.com"
+          git commit --allow-empty -m "keep-alive: trigger Render deploy [skip ci]"
+          git push
