@@ -6,15 +6,18 @@ Doni — Telegram Bot на OpenAI GPT
 Полностью готовый код для Render (Web Service).
 Использует GPT-4o-mini (2025).
 """
+
 import os
 import asyncio
+import signal
+import sys
 from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from openai import OpenAI  # OpenAI SDK
+from openai import OpenAI
 import sqlite3
 from datetime import datetime
 
@@ -23,7 +26,7 @@ from datetime import datetime
 # ==========================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-GPT_MODEL = os.getenv("GPT_MODEL", "gpt-4o-mini")  # Быстрая модель (замени на gpt-4o для мощнее)
+GPT_MODEL = os.getenv("GPT_MODEL", "gpt-4o-mini")
 
 if not TELEGRAM_TOKEN:
     raise RuntimeError("Отсутствует TELEGRAM_TOKEN!")
@@ -76,7 +79,7 @@ def get_last_messages(uid: int, limit: int = 5):
     cur.execute("SELECT role, text FROM messages WHERE user_id=? ORDER BY id DESC LIMIT ?", (uid, limit))
     rows = cur.fetchall()
     conn.close()
-    return rows[::-1]  # reverse
+    return rows[::-1]
 
 # ==========================
 # Веб-сервер для Render (keep-alive)
@@ -95,30 +98,26 @@ async def start_web_server():
     print(f"Веб-сервер запущен на порту {port}")
 
 # ==========================
-# OpenAI GPT API (замена Gemini)
+# OpenAI GPT API
 # ==========================
 async def call_gpt(prompt: str) -> str:
-    # История сообщений для GPT (messages array)
-    history = get_last_messages(0)  # Пока без user_id для простоты; адаптируй под UID
+    history = get_last_messages(0)  # Пока без user_id
     messages = [
         {"role": "system", "content": (
             "Ты — Doni, дружелюбный миллионер с чувством юмора и знаниями в крипте, банкинге и инвестициях. "
             "Отвечай легко, уверенно, иногда с шутками. Используй русский язык."
         )}
     ]
-    
-    # Добавляем историю (последние 5 сообщений)
-    for role, text in history[-4:]:  # -1 для system, +4 для чата
+    for role, text in history[-4:]:
         messages.append({"role": "user" if role == "user" else "assistant", "content": text})
-    
     messages.append({"role": "user", "content": prompt})
 
     try:
         response = client.chat.completions.create(
             model=GPT_MODEL,
             messages=messages,
-            max_tokens=500,  # Лимит ответа
-            temperature=0.8,  # Креативность/юмор
+            max_tokens=500,
+            temperature=0.8,
             top_p=0.95
         )
         return response.choices[0].message.content.strip()
@@ -168,7 +167,7 @@ async def profile_cmd(msg: Message):
         await msg.answer("Ты ещё не зарегистрирован. Напиши /start.")
 
 # ==========================
-# Основной чат (GPT)
+# Основной чат
 # ==========================
 @dp.message()
 async def chat_handler(msg: Message):
@@ -176,28 +175,42 @@ async def chat_handler(msg: Message):
     save_user(user)
     user_text = msg.text.strip()
     save_message(user.id, "user", user_text)
-    
-    # Промпт с историей
+
     history = get_last_messages(user.id)
     hist_text = "\n".join([f"{'Пользователь: ' if r == 'user' else 'Doni: '}{t}" for r, t in history])
-    
-    prompt = (
-        f"История диалога:\n{hist_text}\n\n"
-        f"Пользователь: {user_text}\nDoni:"
-    )
-    
+    prompt = f"История диалога:\n{hist_text}\n\nПользователь: {user_text}\nDoni:"
+
     reply = await call_gpt(prompt)
     save_message(user.id, "assistant", reply)
     await msg.answer(reply)
 
 # ==========================
+# Graceful Shutdown
+# ==========================
+async def shutdown():
+    print("Остановка бота...")
+    await bot.session.close()
+    print("Бот остановлен.")
+    sys.exit(0)
+
+# ==========================
 # Главная точка входа
 # ==========================
 async def main():
-    print("🚀 Doni Bot на GPT запущен!")
+    print("Doni Bot на GPT запущен!")
     init_db()
-    asyncio.create_task(start_web_server())  # Для Render
-    await dp.start_polling(bot)
+    asyncio.create_task(start_web_server())
+
+    # Graceful shutdown
+    loop = asyncio.get_event_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, lambda: asyncio.create_task(shutdown()))
+
+    try:
+        await dp.start_polling(bot)
+    except Exception as e:
+        print(f"Polling остановлен: {e}")
+        await shutdown()
 
 if __name__ == "__main__":
     asyncio.run(main())
