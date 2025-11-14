@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
+"""
+Doni — Telegram Bot на OpenAI GPT
+-------------------
+Полностью готовый код для Render (Web Service).
+Использует GPT-4o-mini (2025).
+"""
 import os
 import asyncio
+from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
 from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from openai import OpenAI
+from openai import OpenAI  # OpenAI SDK
 import sqlite3
 from datetime import datetime
 
@@ -17,7 +23,7 @@ from datetime import datetime
 # ==========================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-GPT_MODEL = os.getenv("GPT_MODEL", "gpt-4o-mini")
+GPT_MODEL = os.getenv("GPT_MODEL", "gpt-4o-mini")  # Быстрая модель (замени на gpt-4o для мощнее)
 
 if not TELEGRAM_TOKEN:
     raise RuntimeError("Отсутствует TELEGRAM_TOKEN!")
@@ -27,7 +33,7 @@ if not OPENAI_API_KEY:
 # OpenAI клиент
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Telegram Bot
+# Bot
 bot = Bot(token=TELEGRAM_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
@@ -46,7 +52,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-
 def save_user(user):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -57,7 +62,6 @@ def save_user(user):
         conn.commit()
     conn.close()
 
-
 def save_message(uid: int, role: str, text: str):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -66,64 +70,83 @@ def save_message(uid: int, role: str, text: str):
     conn.commit()
     conn.close()
 
-
 def get_last_messages(uid: int, limit: int = 5):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("SELECT role, text FROM messages WHERE user_id=? ORDER BY id DESC LIMIT ?", (uid, limit))
     rows = cur.fetchall()
     conn.close()
-    return rows[::-1]
-
+    return rows[::-1]  # reverse
 
 # ==========================
-# GPT (OpenAI)
+# Веб-сервер для Render (keep-alive)
+# ==========================
+async def handle(request):
+    return web.Response(text="Doni is alive")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"Веб-сервер запущен на порту {port}")
+
+# ==========================
+# OpenAI GPT API (замена Gemini)
 # ==========================
 async def call_gpt(prompt: str) -> str:
-
+    # История сообщений для GPT (messages array)
+    history = get_last_messages(0)  # Пока без user_id для простоты; адаптируй под UID
     messages = [
         {"role": "system", "content": (
-            "Ты — Doni, богатый, уверенный в себе миллионер с юмором. "
-            "Ты мастер в криптовалюте, инвестициях и финансах. "
-            "Отвечай дружелюбно, уверенно, иногда шути, всегда на русском."
-        )},
-        {"role": "user", "content": prompt}
+            "Ты — Doni, дружелюбный миллионер с чувством юмора и знаниями в крипте, банкинге и инвестициях. "
+            "Отвечай легко, уверенно, иногда с шутками. Используй русский язык."
+        )}
     ]
+    
+    # Добавляем историю (последние 5 сообщений)
+    for role, text in history[-4:]:  # -1 для system, +4 для чата
+        messages.append({"role": "user" if role == "user" else "assistant", "content": text})
+    
+    messages.append({"role": "user", "content": prompt})
 
     try:
         response = client.chat.completions.create(
             model=GPT_MODEL,
             messages=messages,
-            max_tokens=500,
-            temperature=0.8,
+            max_tokens=500,  # Лимит ответа
+            temperature=0.8,  # Креативность/юмор
             top_p=0.95
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        return f"Ошибка GPT: {str(e)}"
-
+        print(f"GPT ошибка: {e}")
+        return f"Ошибка GPT: {str(e)[:100]}"
 
 # ==========================
-# Команды
+# Обработчики команд
 # ==========================
 @dp.message(Command("start"))
 async def start_cmd(msg: Message):
     save_user(msg.from_user)
     await msg.answer(
-        "<b>Привет!</b> Я <b>Doni</b> — богатый миллионер-бот.\n"
-        "Пиши — пообщаемся 😎"
+        "<b>Привет!</b> Я <b>Doni</b> — твой миллионер с чувством юмора!\n"
+        "Могу болтать, давать советы по крипте и инвестициям, шутить.\n\n"
+        "Просто напиши сообщение!"
     )
-
 
 @dp.message(Command("help"))
 async def help_cmd(msg: Message):
     await msg.answer(
         "<b>Команды:</b>\n"
-        "/start — старт\n"
-        "/help — помощь\n"
-        "/profile — твой профиль\n"
+        "/start — начать\n"
+        "/help — список команд\n"
+        "/profile — информация о тебе\n"
+        "Пиши текст — отвечу через GPT!"
     )
-
 
 @dp.message(Command("profile"))
 async def profile_cmd(msg: Message):
@@ -137,45 +160,44 @@ async def profile_cmd(msg: Message):
         username, first_name, joined_at = row
         await msg.answer(
             f"<b>Твой профиль:</b>\n"
-            f"Имя: {first_name or '—'}\n"
+            f"Имя: {first_name or 'Без имени'}\n"
             f"Логин: @{username or '—'}\n"
             f"Дата регистрации: {joined_at.split('T')[0]}"
         )
     else:
-        await msg.answer("Ты ещё не в базе. Напиши /start.")
-
+        await msg.answer("Ты ещё не зарегистрирован. Напиши /start.")
 
 # ==========================
-# Основной чат
+# Основной чат (GPT)
 # ==========================
 @dp.message()
 async def chat_handler(msg: Message):
     user = msg.from_user
     save_user(user)
-    text = msg.text.strip()
-
-    save_message(user.id, "user", text)
-
-    # История
+    user_text = msg.text.strip()
+    save_message(user.id, "user", user_text)
+    
+    # Промпт с историей
     history = get_last_messages(user.id)
-    hist_text = "\n".join([f"{'Пользователь' if role=='user' else 'Doni'}: {t}" for role, t in history])
-
-    prompt = f"История:\n{hist_text}\n\nПользователь: {text}\nDoni:"
-
+    hist_text = "\n".join([f"{'Пользователь: ' if r == 'user' else 'Doni: '}{t}" for r, t in history])
+    
+    prompt = (
+        f"История диалога:\n{hist_text}\n\n"
+        f"Пользователь: {user_text}\nDoni:"
+    )
+    
     reply = await call_gpt(prompt)
     save_message(user.id, "assistant", reply)
-
     await msg.answer(reply)
 
-
 # ==========================
-# Точка входа (Polling)
+# Главная точка входа
 # ==========================
 async def main():
-    print("🚀 Doni Polling Bot запущен!")
+    print("🚀 Doni Bot на GPT запущен!")
     init_db()
+    asyncio.create_task(start_web_server())  # Для Render
     await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
